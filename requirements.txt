@@ -1,0 +1,5 @@
+# Needed only to run the authenticated live WebSocket collector.
+websocket-client>=1.8,<2
+# Optional forecast decoding (raw GRIB2 remains usable without these):
+# eccodes>=2.38
+# cfgrib>=0.9

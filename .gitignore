@@ -1,0 +1,16 @@
+# Generated research data and raw API downloads (recreate with scripts).
+data/
+
+# Local runtime/database artifacts.
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local credentials and environment files.
+.env
+.env.*
+*.pem
+*.key
