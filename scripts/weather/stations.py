@@ -1,4 +1,4 @@
-"""Station and series configuration for the Phoenix / Las Vegas research set.
+"""Station and series configuration for the weather research set.
 
 Only the four Kalshi daily temperature series are in scope:
   KXHIGHTPHX  Phoenix daily high (Fahrenheit buckets)
@@ -108,6 +108,67 @@ SERIES_TEMP_TYPE.update(
 )
 
 DEFAULT_CITIES = ("phx", "lv")
+
+# Kalshi's broader temperature universe. These entries are collector metadata
+# only: they do not assert that a local station, settlement source, or
+# point-in-time label archive is configured for every city.
+KALSHI_SERIES_CATALOG = {
+    # Daily high/low series currently surfaced by Kalshi.
+    "KXHIGHNY": ("nyc", "high", "daily"),
+    "KXLOWTNYC": ("nyc", "low", "daily"),
+    "KXHIGHLAX": ("la", "high", "daily"),
+    "KXLOWTLAX": ("la", "low", "daily"),
+    "KXHIGHCHI": ("chicago", "high", "daily"),
+    "KXLOWTCHI": ("chicago", "low", "daily"),
+    "KXHIGHMIA": ("miami", "high", "daily"),
+    "KXLOWTMIA": ("miami", "low", "daily"),
+    "KXHIGHAUS": ("austin", "high", "daily"),
+    "KXLOWTAUS": ("austin", "low", "daily"),
+    "KXHIGHTDAL": ("dallas", "high", "daily"),
+    "KXLOWTDAL": ("dallas", "low", "daily"),
+    "KXHIGHTHOU": ("houston", "high", "daily"),
+    "KXLOWTHOU": ("houston", "low", "daily"),
+    "KXHIGHTSATX": ("san_antonio", "high", "daily"),
+    "KXLOWTSATX": ("san_antonio", "low", "daily"),
+    "KXHIGHTOKC": ("oklahoma_city", "high", "daily"),
+    "KXLOWTOKC": ("oklahoma_city", "low", "daily"),
+    "KXHIGHTPHX": ("phx", "high", "daily"),
+    "KXLOWTPHX": ("phx", "low", "daily"),
+    "KXHIGHTLV": ("lv", "high", "daily"),
+    "KXLOWTLV": ("lv", "low", "daily"),
+    "KXHIGHTSFO": ("san_francisco", "high", "daily"),
+    "KXLOWTSFO": ("san_francisco", "low", "daily"),
+    "KXHIGHTSEA": ("seattle", "high", "daily"),
+    "KXLOWTSEA": ("seattle", "low", "daily"),
+    "KXHIGHDEN": ("denver", "high", "daily"),
+    "KXLOWTDEN": ("denver", "low", "daily"),
+    "KXHIGHTATL": ("atlanta", "high", "daily"),
+    "KXLOWTATL": ("atlanta", "low", "daily"),
+    "KXHIGHPHIL": ("philadelphia", "high", "daily"),
+    "KXLOWTPHIL": ("philadelphia", "low", "daily"),
+    "KXHIGHTDC": ("washington_dc", "high", "daily"),
+    "KXLOWTDC": ("washington_dc", "low", "daily"),
+    "KXHIGHTBOS": ("boston", "high", "daily"),
+    "KXLOWTBOS": ("boston", "low", "daily"),
+    "KXHIGHTMIN": ("minneapolis", "high", "daily"),
+    "KXLOWTMIN": ("minneapolis", "low", "daily"),
+    "KXHIGHTNOLA": ("new_orleans", "high", "daily"),
+    "KXLOWTNOLA": ("new_orleans", "low", "daily"),
+    "KXHIGHTEWR": ("newark", "high", "daily"),
+    # Current hourly directional series.
+    "KXTEMPNYCHS": ("nyc", "hourly" , "hourly"),
+    "KXTEMPLAXHS": ("la", "hourly", "hourly"),
+    "KXTEMPCHIHS": ("chicago", "hourly", "hourly"),
+    "KXTEMPMIAH": ("miami", "hourly", "hourly"),
+    # Older hourly families retained for historical collection.
+    "KXTEMPNYCH": ("nyc", "hourly", "hourly"),
+    "KXTEMPLAXH": ("la", "hourly", "hourly"),
+    "KXTEMPCHIH": ("chicago", "hourly", "hourly"),
+    "KXTEMPAUSH": ("austin", "hourly", "hourly"),
+    "KXTEMPDCH": ("washington_dc", "hourly", "hourly"),
+}
+
+KALSHI_SEED_SERIES = tuple(KALSHI_SERIES_CATALOG)
 
 
 def get_cities(names=DEFAULT_CITIES) -> list[City]:

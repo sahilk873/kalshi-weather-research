@@ -150,6 +150,46 @@ respect valid time for the feature being used.
 
 ## Kalshi collection
 
+### Temperature-series universe and discovery
+
+The market collector has a seeded catalog for the known daily high/low
+universe, Newark's retained daily high series, and current plus historical
+hourly families. The catalog is in `scripts/weather/stations.py`; it is
+collector metadata only and does not configure weather stations or authorize
+new trading strategies.
+
+Use series tickers as the collection unit. To refresh the catalog and fetch
+all climate temperature series currently returned by Kalshi's series endpoint:
+
+```bash
+python3 scripts/weather/kalshi_meta.py --discover-temperature-series
+```
+
+This preserves the complete series response at
+`data/weather_research/kalshi/series_catalog.json`, then fetches events and
+nested markets by `series_ticker`. The endpoint is the discovery source for
+new or replaced city families; the local seed prevents a temporarily missing
+API record from silently dropping a known historical series. Use an explicit
+bounded subset when testing:
+
+```bash
+python3 scripts/weather/kalshi_meta.py \
+  --series KXTEMPNYCHS KXTEMPLAXHS KXTEMPCHIHS KXTEMPMIAH
+```
+
+The historical collector accepts the same seeded daily and hourly tickers:
+
+```bash
+python3 scripts/weather/kalshi_historical.py \
+  --series KXTEMPNYCHS KXTEMPLAXHS KXTEMPCHIHS KXTEMPMIAH \
+  --max-markets 200 --max-requests 500
+```
+
+Current hourly families can replace older families, so retain both when
+building historical coverage. Treat newly discovered series as unverified
+until their event-level settlement source, station, timezone, bucket/threshold
+semantics, and historical availability are inspected.
+
 ### Public current metadata
 
 - Script: `scripts/weather/kalshi_meta.py`.

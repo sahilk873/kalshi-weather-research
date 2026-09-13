@@ -12,20 +12,20 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 try:
-    from stations import CITIES
+    from stations import CITIES, KALSHI_SERIES_CATALOG
 except ImportError:
-    from scripts.weather.stations import CITIES
+    from scripts.weather.stations import CITIES, KALSHI_SERIES_CATALOG
 
 BASE = "https://external-api.kalshi.com/trade-api/v2"
-SERIES = {c.kalshi_high_series: (k, "high") for k,c in CITIES.items()} | {c.kalshi_low_series: (k, "low") for k,c in CITIES.items()}
-SERIES.update({"KXTEMPNYCH": ("nyc", "hourly"), "KXTEMPAUSH": ("austin", "hourly"), "KXTEMPLAXH": ("la", "hourly")})
-# The catalog also exposes daily high/low lines for the auxiliary city focus.
-# They remain forecast-research inputs: event-level settlement rules are
-# Weather Company sourced and are not asserted to match the PHX/LV oracle.
+SERIES = {
+    ticker: (city, temp_type)
+    for ticker, (city, temp_type, _frequency) in KALSHI_SERIES_CATALOG.items()
+}
 SERIES.update({
-    "KXHIGHNY": ("nyc", "high"), "KXLOWTNYC": ("nyc", "low"),
-    "KXHIGHLAX": ("la", "high"), "KXLOWTLAX": ("la", "low"),
-    "KXHIGHAUS": ("austin", "high"), "KXLOWTAUS": ("austin", "low"),
+    c.kalshi_high_series: (k, "high") for k, c in CITIES.items()
+})
+SERIES.update({
+    c.kalshi_low_series: (k, "low") for k, c in CITIES.items()
 })
 ROOT = Path(__file__).resolve().parents[2] / "data/weather_research/kalshi_historical_city"
 def event_date(m):
@@ -58,7 +58,18 @@ def pages(path, params, raw_dir, key, response_key=None, limit=1000):
         if not cur: break
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument('--series', nargs='+', choices=sorted(SERIES), default=['KXTEMPNYCH','KXTEMPAUSH','KXTEMPLAXH']); ap.add_argument('--start'); ap.add_argument('--end'); ap.add_argument('--interval', choices=['1m','1h','1d'], default='1h'); ap.add_argument('--max-markets',type=int,default=1000); ap.add_argument('--max-requests',type=int,default=5000); ap.add_argument('--markets-only',action='store_true'); ap.add_argument('--dry-run',action='store_true'); args=ap.parse_args()
+    ap=argparse.ArgumentParser()
+    ap.add_argument('--series', nargs='+', default=['KXTEMPNYCH','KXTEMPAUSH','KXTEMPLAXH'])
+    ap.add_argument('--start'); ap.add_argument('--end')
+    ap.add_argument('--interval', choices=['1m','1h','1d'], default='1h')
+    ap.add_argument('--max-markets',type=int,default=1000)
+    ap.add_argument('--max-requests',type=int,default=5000)
+    ap.add_argument('--markets-only',action='store_true')
+    ap.add_argument('--dry-run',action='store_true')
+    args=ap.parse_args()
+    unknown = sorted(set(args.series) - set(SERIES))
+    if unknown:
+        ap.error(f"unknown series: {unknown}; use --series from the catalog")
     ROOT.mkdir(parents=True,exist_ok=True); print('cutoff:', api('/historical/cutoff',{},ROOT/'raw'/'cutoff.json'))
     if args.dry_run: print('series:',args.series,'interval:',args.interval); return
     requests=1; markets=[]

@@ -41,6 +41,7 @@ TimescaleDB; do not discard raw source messages.
 | `iem/asos_daily.csv` | station/local date, sampled extrema and times, coverage count | a convenience aggregate; never label it official |
 | `solar/solar_features.csv` | city/date, sunrise/sunset UTC/local, day length, declination | deterministic local-calendar values; calculate instantaneous angles at a feature timestamp |
 | `kalshi/events.csv` | event/series/city/high-low/outcome date, settlement source URL, source rules | API retrieval snapshot; settlement source must remain joined to event |
+| `kalshi/series_catalog.json` | complete `/series` response, request URL, retrieval timestamp, and discovered climate-temperature series metadata | collector discovery snapshot; the seeded catalog is a fallback, and newly discovered series require independent station/timezone/settlement verification |
 | `kalshi/markets.csv` | ticker, bucket bounds, status/result, open/close/settlement timestamps, quotes/OI/volume | API-snapshot quotes are not historical book states |
 | `kalshi/trades.csv` | trade ID, ticker, created timestamp, price, count, taker sides | event time is Kalshi `created_time` |
 | `kalshi/candlesticks_*.csv` | ticker, interval, period end, OHLC, bid/ask, OI, volume | period end must be no later than decision time |

@@ -1,7 +1,9 @@
-"""Normalize Kalshi Phoenix/Las Vegas daily temperature market metadata.
+"""Normalize Kalshi temperature market metadata.
 
-Fresh bounded pull of the four series using the public trade-API v2 (no auth
-required for market data / events / candlesticks / trades):
+The default is a fresh bounded pull of the configured PHX/LV series using the
+public trade-API v2 (no auth required for market data / events / candlesticks /
+trades). ``--discover-temperature-series`` refreshes the broader climate
+temperature universe from ``GET /series`` before fetching events:
     https://external-api.kalshi.com/trade-api/v2/events?series_ticker=...
 
 For each active event (local outcome date), all mutually exclusive bucket
@@ -29,10 +31,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -43,8 +47,8 @@ sys.path.insert(0, str(_SELF))
 import common  # noqa: E402
 from common import ensure_runtime_dirs, http_get_json, utcnow  # noqa: E402
 from stations import (CITIES, DEFAULT_CITIES, KALSHI_API_BASE,  # noqa: E402
-                      KALSHI_SERIES_TO_CITY, SERIES_TEMP_TYPE,
-                      get_cities)
+                      KALSHI_SERIES_CATALOG, KALSHI_SERIES_TO_CITY,
+                      SERIES_TEMP_TYPE, get_cities)
 
 EVENT_COLS = [
     "event_ticker", "series_ticker", "city", "temp_type",
@@ -91,6 +95,54 @@ def fetch_events(series_ticker: str) -> list[dict]:
         if not cursor:
             break
     return events
+
+
+def fetch_temperature_series(output_path: Path) -> list[str]:
+    """Discover temperature series and persist the complete API response.
+
+    The series endpoint is the source of discovery. The local seed catalog is
+    still used as a fallback because an API response can be temporarily
+    incomplete or a newly launched series can have an unexpected title.
+    """
+    url = f"{KALSHI_API_BASE}/series?include_product_metadata=true"
+    payload = http_get_json(url, timeout=60)
+    records = payload.get("series") or []
+    output_path.write_text(json.dumps({
+        "request_url": url,
+        "retrieved_at": utcnow(),
+        "series": records,
+    }, indent=2) + "\n")
+    tickers = {
+        str(row.get("ticker", "")) for row in records
+        if is_temperature_series(row)
+    }
+    return sorted(tickers | set(KALSHI_SERIES_CATALOG))
+
+
+def is_temperature_series(record: dict) -> bool:
+    """Recognize climate temperature templates without parsing market IDs."""
+    category = str(record.get("category", ""))
+    categories = {str(x) for x in (record.get("categories") or [])}
+    title = str(record.get("title", "")).lower()
+    ticker = str(record.get("ticker", ""))
+    climate = category == "Climate and Weather" or "Climate and Weather" in categories
+    return climate and ("temperature" in title or ticker.startswith(("KXHIGH", "KXLOWT", "KXTEMP")))
+
+
+def series_context(series_ticker: str):
+    """Return the metadata needed by row extraction for any catalog series."""
+    info = KALSHI_SERIES_CATALOG.get(series_ticker)
+    if info:
+        city_key, temp_type, _frequency = info
+    else:
+        city_key = "unknown"
+        temp_type = "hourly" if series_ticker.startswith("KXTEMP") else (
+            "high" if series_ticker.startswith("KXHIGH") else
+            "low" if series_ticker.startswith("KXLOWT") else ""
+        )
+    configured = CITIES.get(city_key)
+    tz_name = configured.tz_name if configured else "UTC"
+    return SimpleNamespace(key=city_key, tz_name=tz_name)
 
 
 def parse_date_from_ticker(event_ticker: str) -> str | None:
@@ -183,7 +235,10 @@ def extract_rows(events: list[dict], city) -> tuple[list[dict], list[dict]]:
                   f"outcome_local_date blank for review",
                   file=sys.stderr)
         city_key = city.key
-        temp_type = SERIES_TEMP_TYPE.get(ev.get("series_ticker"), "")
+        series_ticker = ev.get("series_ticker", "")
+        temp_type = SERIES_TEMP_TYPE.get(series_ticker, "")
+        if not temp_type:
+            temp_type = KALSHI_SERIES_CATALOG.get(series_ticker, ("", "", ""))[1]
         srcs = ev.get("settlement_sources") or []
         src_name = srcs[0].get("name", "") if srcs else ""
         src_url = srcs[0].get("url", "") if srcs else ""
@@ -246,20 +301,40 @@ def extract_rows(events: list[dict], city) -> tuple[list[dict], list[dict]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cities", nargs="*", default=None)
+    ap.add_argument("--series", nargs="*", default=None,
+                    help="explicit series tickers; overrides --cities")
+    ap.add_argument("--discover-temperature-series", action="store_true",
+                    help="discover climate temperature series via /series")
     args = ap.parse_args()
 
     dirs = ensure_runtime_dirs()
-    cities = get_cities(args.cities or DEFAULT_CITIES)
+    if args.series:
+        series_tickers = args.series
+    elif args.discover_temperature_series:
+        series_tickers = fetch_temperature_series(
+            dirs["kalshi_out"] / "series_catalog.json")
+    else:
+        cities = get_cities(args.cities or DEFAULT_CITIES)
+        series_tickers = [
+            series_ticker
+            for city in cities
+            for series_ticker in
+            (city.kalshi_high_series, city.kalshi_low_series)
+        ]
+    unknown = sorted(set(series_tickers) - set(KALSHI_SERIES_CATALOG)
+                     - set(SERIES_TEMP_TYPE))
+    if unknown and not args.discover_temperature_series:
+        ap.error(f"unknown series: {unknown}; use --discover-temperature-series")
     all_events, all_markets = [], []
-    for city in cities:
-        for series_ticker in (city.kalshi_high_series, city.kalshi_low_series):
-            print(f"[{city.key}] fetching {series_ticker} events...")
-            evs = fetch_events(series_ticker)
-            ev_rows, mk_rows = extract_rows(evs, city)
-            all_events.extend(ev_rows)
-            all_markets.extend(mk_rows)
-            print(f"  {series_ticker}: {len(evs)} events, "
-                  f"{len(mk_rows)} markets")
+    for series_ticker in series_tickers:
+        city = series_context(series_ticker)
+        print(f"[{city.key}] fetching {series_ticker} events...")
+        evs = fetch_events(series_ticker)
+        ev_rows, mk_rows = extract_rows(evs, city)
+        all_events.extend(ev_rows)
+        all_markets.extend(mk_rows)
+        print(f"  {series_ticker}: {len(evs)} events, "
+              f"{len(mk_rows)} markets")
 
     out_events = dirs["kalshi_out"] / "events.csv"
     with out_events.open("w", newline="") as fh:
