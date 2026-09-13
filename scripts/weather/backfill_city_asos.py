@@ -4,12 +4,12 @@ These stations are observational proxies for Kalshi's NYC/Austin/LA hourly
 contracts; verify each contract's settlement source before using as labels.
 """
 from __future__ import annotations
-import argparse,csv,sys
+import argparse,csv,sys,hashlib,json
 from dataclasses import replace
 from datetime import date,datetime,timedelta,timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from iem_asos import fetch_archive,parse_archive,PARSED_COLUMNS
+from iem_asos import fetch_archive,parse_archive,PARSED_COLUMNS,iem_url
 from stations import City
 
 CONFIG={
@@ -21,13 +21,16 @@ def mend(d):
  n=(d.replace(day=28)+timedelta(days=4)).replace(day=1); return n-timedelta(days=1)
 def main():
  ap=argparse.ArgumentParser(); ap.add_argument('--start',default='2024-01-01'); ap.add_argument('--end',default='2026-09-11'); ap.add_argument('--cities',nargs='+',choices=CONFIG,default=list(CONFIG)); a=ap.parse_args(); start=date.fromisoformat(a.start); end=date.fromisoformat(a.end)
- root=Path(__file__).resolve().parents[2]/'data/weather_research/city_asos'; raw=root/'raw'; raw.mkdir(parents=True,exist_ok=True); rows=[]
+ root=Path(__file__).resolve().parents[2]/'data/weather_research/city_asos'; raw=root/'raw'; raw.mkdir(parents=True,exist_ok=True); rows=[]; manifest=[]
  for key in a.cities:
   c=CONFIG[key]; cur=start
   while cur<=end:
    stop=min(mend(cur),end); s=datetime.combine(cur,datetime.min.time(),tzinfo=timezone.utc); e=datetime.combine(stop,datetime.min.time(),tzinfo=timezone.utc)
-   p=fetch_archive(c,s,e,raw); rows.extend(parse_archive(p,c)); cur=stop+timedelta(days=1)
+   p=fetch_archive(c,s,e,raw); rows.extend(parse_archive(p,c))
+   manifest.append({'city':key,'station':c.iem_sid,'start_utc':s.isoformat().replace('+00:00','Z'),'end_utc':e.isoformat().replace('+00:00','Z'),'source_url':iem_url(c,s,e),'raw_path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'retrieved_at_utc':datetime.fromtimestamp(p.stat().st_mtime,timezone.utc).isoformat().replace('+00:00','Z'),'receipt_method':'filesystem_mtime_for_cached_archive'})
+   cur=stop+timedelta(days=1)
  rows.sort(key=lambda r:(r['station'],r['valid_utc'])); out=root/'asos_parsed.csv';
  with out.open('w',newline='') as f: w=csv.DictWriter(f,fieldnames=PARSED_COLUMNS); w.writeheader(); w.writerows(rows)
+ (root/'manifest.json').write_text(json.dumps({'rows':manifest,'generated_at_utc':datetime.now(timezone.utc).isoformat().replace('+00:00','Z')},indent=2,sort_keys=True)+'\n')
  print(f'wrote {len(rows)} rows to {out}')
 if __name__=='__main__': main()

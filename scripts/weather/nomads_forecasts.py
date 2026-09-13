@@ -9,10 +9,32 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[2] / "data" / "weather_research" / "forecasts"
-BBOX = {"phx": (36.5, -115.5, -111.5, 33.0), "klas": (38.5, -117.5, -113.0, 34.0)}
-VARS = {"hrrr": [("TMP", "lev_2_m_above_ground"), ("DPT", "lev_2_m_above_ground"), ("UGRD", "lev_10_m_above_ground"), ("VGRD", "lev_10_m_above_ground"), ("APCP", "lev_surface"), ("PRES", "lev_surface"), ("TCDC", "lev_entire_atmosphere"), ("DSWRF", "lev_surface")], "nbm": [("TMP", "lev_2_m_above_ground"), ("DPT", "lev_2_m_above_ground"), ("WIND", "lev_10_m_above_ground"), ("WDIR", "lev_10_m_above_ground"), ("APCP", "lev_surface"), ("TCDC", "lev_entire_atmosphere"), ("TMAX", "lev_2_m_above_ground"), ("TMIN", "lev_2_m_above_ground")]}
+BBOX = {
+    "phx": (36.5, -115.5, -111.5, 33.0),
+    "klas": (38.5, -117.5, -113.0, 34.0),
+    # Small city-centered extraction boxes for the active auxiliary layer.
+    "nyc": (41.2, -74.5, -73.4, 40.4),
+    "la": (34.5, -119.0, -117.5, 33.5),
+    "austin": (31.0, -98.2, -97.0, 29.8),
+}
+STATIONS = {
+    "phx": (33.4343, -112.0116), "klas": (36.0719, -115.1633),
+    "nyc": (40.7789, -73.9692), "la": (33.9382, -118.3886),
+    "austin": (30.1945, -97.6699),
+}
+VARS = {"hrrr": [
+    ("TMP", "lev_2_m_above_ground"), ("DPT", "lev_2_m_above_ground"),
+    ("UGRD", "lev_10_m_above_ground"), ("VGRD", "lev_10_m_above_ground"),
+    ("GUST", "lev_surface"), ("APCP", "lev_surface"), ("PRES", "lev_surface"),
+    ("TCDC", "lev_entire_atmosphere"), ("DSWRF", "lev_surface"),
+    ("CAPE", "lev_surface"), ("CIN", "lev_surface"),
+    ("TMP", "lev_925_mb"), ("TMP", "lev_850_mb"), ("TMP", "lev_700_mb"),
+    ("UGRD", "lev_850_mb"), ("VGRD", "lev_850_mb"), ("HGT", "lev_500_mb"),
+], "nbm": [("TMP", "lev_2_m_above_ground"), ("DPT", "lev_2_m_above_ground"), ("WIND", "lev_10_m_above_ground"), ("WDIR", "lev_10_m_above_ground"), ("APCP", "lev_surface"), ("TCDC", "lev_entire_atmosphere")], "gfs": [("TMP", "lev_2_m_above_ground"), ("DPT", "lev_2_m_above_ground"), ("UGRD", "lev_10_m_above_ground"), ("VGRD", "lev_10_m_above_ground"), ("APCP", "lev_surface"), ("TCDC", "lev_entire_atmosphere")]}
+REJECTION_FIELDS = ["model", "city", "initialization_time_utc", "valid_time_utc", "lead_hours", "request_url", "retrieved_at_utc", "reason"]
 
 def iso(dt): return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 def url_for(model, init, lead, city):
@@ -20,9 +42,12 @@ def url_for(model, init, lead, city):
     if model == "hrrr":
         endpoint = "https://nomads.ncep.noaa.gov/cgi-bin/filter_hrrr_2d.pl"
         fn = f"hrrr.t{h}z.wrfsfcf{lead:02d}.grib2"; directory = f"/hrrr.{d}/conus"
-    else:
+    elif model == "nbm":
         endpoint = "https://nomads.ncep.noaa.gov/cgi-bin/filter_blend.pl"
         fn = f"blend.t{h}z.core.f{lead:03d}.co.grib2"; directory = f"/blend.{d}/{h}/core"
+    else:
+        endpoint = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+        fn = f"gfs.t{h}z.pgrb2.0p25.f{lead:03d}"; directory = f"/gfs.{d}/{h}/atmos"
     q = {"dir": directory, "file": fn, "subregion": "", "toplat": top, "leftlon": left, "rightlon": right, "bottomlat": bottom}
     for var, lev in VARS[model]: q[f"var_{var}"] = "on"; q[lev] = "on"
     return endpoint + "?" + urlencode(q)
@@ -49,7 +74,9 @@ def download(model, init, lead, city, max_bytes=80_000_000):
         with urlopen(Request(uri, headers={"User-Agent": "kalshi-weather-research/1.0"}), timeout=180) as r: data = r.read(max_bytes + 1)
         if len(data) > max_bytes: raise RuntimeError("filtered GRIB exceeds --max-bytes")
         path.write_bytes(data)
-    row = {"model": model, "city": city, "initialization_time_utc": iso(init), "valid_time_utc": iso(init + timedelta(hours=lead)), "lead_hours": lead, "station_lat": 33.4343 if city == "phx" else 36.0719, "station_lon": -112.0116 if city == "phx" else -115.1633, "request_url": uri, "raw_path": str(path.relative_to(ROOT)), "sha256": hashlib.sha256(data).hexdigest(), "ingested_at_utc": iso(datetime.now(timezone.utc))}
+    lat, lon = STATIONS[city]
+    receipt = iso(datetime.now(timezone.utc))
+    row = {"model": model, "city": city, "initialization_time_utc": iso(init), "valid_time_utc": iso(init + timedelta(hours=lead)), "lead_hours": lead, "station_lat": lat, "station_lon": lon, "request_url": uri, "raw_path": str(path.relative_to(ROOT)), "sha256": hashlib.sha256(data).hexdigest(), "ingested_at_utc": receipt, "available_time_utc": receipt, "available_time_method": "conservative_ingest"}
     key = (row["model"], row["city"], row["initialization_time_utc"], row["lead_hours"])
     seen = existing_keys()
     if key in seen:
@@ -62,6 +89,24 @@ def download(model, init, lead, city, max_bytes=80_000_000):
     exists = mp.exists()
     with mp.open("a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields); (w.writeheader() if not exists else None); w.writerow(row)
+    return row
+
+
+def record_rejection(model, init, lead, city, error):
+    """Append an explicit unavailable/failed NOMADS request record."""
+    path = ROOT / "rejections.csv"
+    row = {"model": model, "city": city, "initialization_time_utc": iso(init),
+           "valid_time_utc": iso(init + timedelta(hours=lead)), "lead_hours": lead,
+           "request_url": url_for(model, init, lead, city),
+           "retrieved_at_utc": iso(datetime.now(timezone.utc)),
+           "reason": (f"http_{error.code}" if isinstance(error, HTTPError)
+                      else f"{type(error).__name__}:{error}")}
+    exists = path.exists()
+    with path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=REJECTION_FIELDS)
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
     return row
 
 def decode(path):
@@ -79,7 +124,7 @@ def decode(path):
     return rows
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--model", choices=["hrrr", "nbm"], required=True)
+    ap = argparse.ArgumentParser(); ap.add_argument("--model", choices=["hrrr", "nbm", "gfs"], required=True)
     ap.add_argument("--init", help="single UTC run, ISO timestamp")
     ap.add_argument("--start", help="archive start UTC date (inclusive)"); ap.add_argument("--end", help="archive end UTC date (inclusive)")
     ap.add_argument("--run-hours", nargs="+", type=int, default=[0,6,12,18]); ap.add_argument("--leads", nargs="+", type=int, default=[0,1,2]); ap.add_argument("--cities", nargs="+", choices=list(BBOX), default=list(BBOX)); ap.add_argument("--max-requests", type=int, default=100); ap.add_argument("--decode", action="store_true"); args = ap.parse_args()
@@ -92,6 +137,10 @@ def main():
     for init in inits:
         for city in args.cities:
             for lead in args.leads:
-                row = download(args.model, init, lead, city); print(row["raw_path"])
-                if args.decode: print(decode(ROOT / row["raw_path"]))
+                try:
+                    row = download(args.model, init, lead, city); print(row["raw_path"])
+                    if args.decode: print(decode(ROOT / row["raw_path"]))
+                except Exception as exc:
+                    rejection = record_rejection(args.model, init, lead, city, exc)
+                    print(f"rejected {rejection['model']}/{rejection['city']}/f{rejection['lead_hours']}: {rejection['reason']}", file=sys.stderr)
 if __name__ == "__main__": main()

@@ -25,7 +25,15 @@ def main():
   while cur<=end:
    stop=min(month_end(cur),end); s=datetime(cur.year,cur.month,cur.day,tzinfo=timezone.utc); e=datetime(stop.year,stop.month,stop.day,tzinfo=timezone.utc)
    p=fetch_archive(city,s,e,raw); parsed.extend(parse_archive(p,city)); cur=stop+timedelta(days=1)
- out=root/'asos_parsed.csv'; parsed.sort(key=lambda r:(r['station'],r['valid_utc']))
+ out=root/'asos_parsed.csv'
+ # Merge reruns by natural observation key so a bounded refresh cannot erase
+ # an earlier backfill. Raw monthly files remain immutable evidence.
+ existing=[]
+ if out.exists():
+  with out.open(newline="") as f: existing=list(csv.DictReader(f))
+ merged={ (r.get('station',''),r.get('valid_utc','')): r for r in existing }
+ merged.update({ (r.get('station',''),r.get('valid_utc','')): r for r in parsed })
+ parsed=sorted(merged.values(),key=lambda r:(r['station'],r['valid_utc']))
  with out.open('w',newline='') as f: w=csv.DictWriter(f,fieldnames=PARSED_COLUMNS);w.writeheader();w.writerows(parsed)
  print(f'wrote {out} ({len(parsed)} rows); fetched_at={utcnow()}')
 if __name__=='__main__':main()

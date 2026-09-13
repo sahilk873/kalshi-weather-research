@@ -10,6 +10,8 @@ __pycache__/
 .DS_Store
 
 # Local credentials and environment files.
+Sahil_BOT.txt
+Sahilbrahim.txt
 .env
 .env.*
 *.pem

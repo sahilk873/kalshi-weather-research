@@ -13,6 +13,7 @@ Guarantees enforced here:
 """
 from __future__ import annotations
 import bisect, csv, sys
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -57,9 +58,14 @@ def prior_value(rows, times, at, minutes, field):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--parsed", type=Path)
+    parser.add_argument("--solar", type=Path)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
     dirs = ensure_runtime_dirs()
-    parsed_path = dirs["iem_out"] / "asos_parsed.csv"
-    solar_path = dirs["solar_out"] / "solar_features.csv"
+    parsed_path = args.parsed or (dirs["iem_out"] / "asos_parsed.csv")
+    solar_path = args.solar or (dirs["solar_out"] / "solar_features.csv")
 
     solar = {}
     with solar_path.open() as fh:
@@ -147,7 +153,7 @@ def main() -> None:
                 "feature_asof_utc": r["valid_utc"],
             })
 
-    dest = dirs["research"] / "derived_intraday_state.csv"
+    dest = args.output or (dirs["research"] / "derived_intraday_state.csv")
     with dest.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=COLS)
         w.writeheader()

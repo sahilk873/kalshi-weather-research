@@ -25,7 +25,7 @@ VARIABLES = (
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
     "pressure_msl", "surface_pressure", "shortwave_radiation",
-    "direct_radiation", "diffuse_radiation", "cape",
+    "direct_radiation", "diffuse_radiation", "cape", "convective_inhibition",
 )
 CITY_LOCATIONS = {
     "nyc": ("NYC", 40.7128, -74.0060, "America/New_York"),
@@ -67,10 +67,11 @@ def parse_response(payload: dict, city_key: str, model: str, retrieved_at: str) 
                 valid = str(valid_time)
                 if len(valid) == 16:
                     valid += ":00Z"
+                canonical_variable = "cin" if variable == "convective_inhibition" else variable
                 rows.append({"forecast_run_time": retrieved_at, "valid_time": valid,
                              "city": label, "city_key": city_key, "latitude": lat,
                              "longitude": lon, "timezone": tz_name, "model": model,
-                             "member_id": member_id, "variable": variable,
+                             "member_id": member_id, "variable": canonical_variable,
                              "value": float(value), "retrieved_at": retrieved_at})
     return rows
 

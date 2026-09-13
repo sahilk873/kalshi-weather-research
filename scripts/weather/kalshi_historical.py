@@ -1,6 +1,12 @@
-"""Bounded extractor for Kalshi's archived PHX/LV temperature markets."""
+"""Bounded extractor for archived temperature markets.
+
+The default remains the retained auxiliary hourly NYC/LA/Austin sample; the
+explicit daily city series are available by ``--series`` but remain outside
+the PHX/LV settlement-oracle scope until their Weather Company rules are
+independently verified.
+"""
 from __future__ import annotations
-import argparse, csv, json, time
+import argparse, csv, json, re, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -13,11 +19,22 @@ except ImportError:
 BASE = "https://external-api.kalshi.com/trade-api/v2"
 SERIES = {c.kalshi_high_series: (k, "high") for k,c in CITIES.items()} | {c.kalshi_low_series: (k, "low") for k,c in CITIES.items()}
 SERIES.update({"KXTEMPNYCH": ("nyc", "hourly"), "KXTEMPAUSH": ("austin", "hourly"), "KXTEMPLAXH": ("la", "hourly")})
+# The catalog also exposes daily high/low lines for the auxiliary city focus.
+# They remain forecast-research inputs: event-level settlement rules are
+# Weather Company sourced and are not asserted to match the PHX/LV oracle.
+SERIES.update({
+    "KXHIGHNY": ("nyc", "high"), "KXLOWTNYC": ("nyc", "low"),
+    "KXHIGHLAX": ("la", "high"), "KXLOWTLAX": ("la", "low"),
+    "KXHIGHAUS": ("austin", "high"), "KXLOWTAUS": ("austin", "low"),
+})
 ROOT = Path(__file__).resolve().parents[2] / "data/weather_research/kalshi_historical_city"
 def event_date(m):
     code=m.get('event_ticker','').split('-')[-1]
-    try: return datetime.strptime(code,'%y%b%d').date().isoformat()
-    except ValueError: return ''
+    match = re.fullmatch(r'(\d{2})([A-Z]{3})(\d{2})(?:\d{2})?', code)
+    if match:
+        try: return datetime.strptime(''.join(match.groups()[:3]), '%y%b%d').date().isoformat()
+        except ValueError: pass
+    return ''
 
 def api(path, params, raw_path, retries=3):
     q = urlencode({k:v for k,v in params.items() if v is not None})
@@ -54,10 +71,23 @@ def main():
             if len(markets)>=args.max_markets: break
         if len(markets)>=args.max_markets: break
     mf=ROOT/'markets.csv'; fields=['ticker','event_ticker','series_ticker','city','variable','result','floor_strike','cap_strike','open_time','close_time','expiration_time','volume','open_interest']
+    market_rows=[]
+    if mf.exists():
+        with mf.open(newline='') as f: market_rows.extend(csv.DictReader(f))
+    aliases = {"HIGHNY": "KXHIGHNY", "HIGHAUS": "KXHIGHAUS"}
+    for row in market_rows:
+        normalized = aliases.get(row.get('series_ticker', ''))
+        if normalized:
+            row['series_ticker'] = normalized
+            row['city'], row['variable'] = SERIES[normalized]
+    for m in markets:
+        # The requested series is authoritative when the historical response
+        # omits ``series_ticker`` or returns a shortened event prefix.
+        s=m.get('series_ticker') or s; city,var=SERIES.get(s,('', ''))
+        market_rows.append({'ticker':m.get('ticker'),'event_ticker':m.get('event_ticker'),'series_ticker':s,'city':city,'variable':var,'result':m.get('result'),'floor_strike':m.get('floor_strike'),'cap_strike':m.get('cap_strike'),'open_time':m.get('open_time'),'close_time':m.get('close_time'),'expiration_time':m.get('expiration_time'),'volume':m.get('volume_fp',m.get('volume')),'open_interest':m.get('open_interest_fp',m.get('open_interest'))})
+    dedup={r.get('ticker'):r for r in market_rows if r.get('ticker')}
     with mf.open('w',newline='') as f:
-        w=csv.DictWriter(f,fieldnames=fields); w.writeheader()
-        for m in markets:
-            s=m.get('series_ticker') or m.get('event_ticker','').rsplit('-',1)[0]; city,var=SERIES.get(s,('', '')); w.writerow({'ticker':m.get('ticker'),'event_ticker':m.get('event_ticker'),'series_ticker':s,'city':city,'variable':var,'result':m.get('result'),'floor_strike':m.get('floor_strike'),'cap_strike':m.get('cap_strike'),'open_time':m.get('open_time'),'close_time':m.get('close_time'),'expiration_time':m.get('expiration_time'),'volume':m.get('volume_fp',m.get('volume')),'open_interest':m.get('open_interest_fp',m.get('open_interest'))})
+        w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(dedup.values())
     if args.markets_only:
         print(f'markets={len(markets)} (market metadata only)'); return
     trade_rows=[]; candle_rows=[]
@@ -71,6 +101,13 @@ def main():
         for c in d.get('candlesticks',[]): candle_rows.append({'ticker':ticker,'end_period_ts':c.get('end_period_ts'),'period_minutes':period,'volume':c.get('volume'),'open_interest':c.get('open_interest'),'price_open':(c.get('price') or {}).get('open'),'price_high':(c.get('price') or {}).get('high'),'price_low':(c.get('price') or {}).get('low'),'price_close':(c.get('price') or {}).get('close'),'yes_bid_close':(c.get('yes_bid') or {}).get('close'),'yes_ask_close':(c.get('yes_ask') or {}).get('close')})
     def write(name, rows):
         if not rows:return
-        with (ROOT/name).open('w',newline='') as f: w=csv.DictWriter(f,fieldnames=rows[0]); w.writeheader(); w.writerows(rows)
+        path=ROOT/name; existing=[]
+        if path.exists():
+            with path.open(newline='') as f: existing=list(csv.DictReader(f))
+        combined=existing+rows
+        key_fields={'trades.csv':('ticker','trade_id'),'candles.csv':('ticker','end_period_ts','period_minutes')}[name]
+        dedup={tuple(r.get(k,'') for k in key_fields):r for r in combined}
+        with path.open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=list(combined[0])); w.writeheader(); w.writerows(dedup.values())
     write('trades.csv',trade_rows); write('candles.csv',candle_rows); print(f'markets={len(markets)} trades={len(trade_rows)} candles={len(candle_rows)} requests<={requests}')
 if __name__=='__main__': main()

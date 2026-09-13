@@ -87,6 +87,7 @@ python3 scripts/weather/kalshi_meta.py
 # Larger historical Kalshi pull: retrieve only data exposed by the API.
 python3 scripts/weather/kalshi_trades_candles.py --max-events-per-series 100
 python3 scripts/weather/build_intraday_state.py
+python3 scripts/weather/test_p0_semantics.py
 python3 scripts/weather/collect_nearby_asos.py --days 30
 python3 scripts/weather/load_sqlite.py
 
@@ -97,7 +98,125 @@ python3 scripts/weather/nws_cli_archive.py --start 2026-09-05 --end 2026-09-11
 # sets; the script rejects unexpectedly large global files by default.
 python3 scripts/weather/model_archive.py --model hrrr --init 2026-09-10T00 --leads 0 1 2
 
+# Refresh slow climate-regime covariates and validate all source provenance.
+python3 scripts/weather/cpc_indices.py --raw data/weather_research/cpc/oni.ascii.txt --output data/weather_research/cpc/oni.csv
+python3 scripts/weather/data_quality_gates.py --output data/weather_research/reports/data_quality_gates.json
+python3 scripts/weather/audit_artifact_inventory.py --output data/weather_research/reports/artifact_inventory.json
+
+# Decode a retained RTMA analysis object at the registered station points.
+/tmp/kalshi-grib/bin/python scripts/weather/decode_rtma_point.py \
+  --input data/weather_research/rtma/raw/rtma2p5.t00z.2dvaranl_ndfd.grb2_wexp \
+  --output data/weather_research/rtma/rtma_point_features.csv
+
 python3 scripts/weather/validate.py
+```
+
+`run_sample.py` is a bounded refresh of the active trailing PHX/LV tier. It
+rewrites the active trailing CSVs from its selected windows; preserve larger
+backfills and their raw payloads separately (for example,
+`iem_backfill/` and `reports/phx_lv_intraday_state_backfill.csv`). Rebuild
+SQLite afterward so its tables mirror the current normalized files.
+
+### P0 semantics before model work
+
+`scripts/weather/settlement_semantics.py` explicitly computes the NWS
+local-standard-time settlement interval (including Las Vegas DST behavior) and
+maps a single continuous temperature distribution to the event's complete,
+mutually exclusive Kalshi bucket set. To materialize model output after a
+future forecast postprocessor exists, provide a CSV with
+`event_ticker`, `decision_time_utc`, `mean_f`, `stddev_f`,
+`forecast_issue_time`, and `source_receipt_time`:
+
+```bash
+python3 scripts/weather/build_bucket_probabilities.py \
+  --forecasts /path/to/point_in_time_distributions.csv
+```
+
+The command fails closed when the forecast was issued or received after its
+declared decision timestamp, or when either timestamp is missing or unusable,
+so no row can reach the research probabilities without a valid issue and
+receipt at or before the decision time. It creates research probabilities
+only; it does not estimate a trading edge or place orders.
+
+The P1 skill evaluator is similarly input-driven and does not fabricate
+values. See [`docs/REQUIREMENTS_MATRIX.md`](docs/REQUIREMENTS_MATRIX.md) for a
+requirement-by-requirement evidence map, alongside the open-work tracker and
+implemented-status log.
+baseline forecasts. Once an intact point-in-time forecast CSV and label CSV
+are available, run:
+
+```bash
+python3 scripts/weather/evaluate_forecast_skill.py \
+  --forecasts /path/to/forecasts.csv \
+  --labels /path/to/labels.csv \
+  --output /path/to/skill_summary.csv \
+  --rejections /path/to/skill_rejections.csv
+```
+
+It reports MAE and Gaussian CRPS by model/version, city, high/low type, lead,
+and target month. Invalid or temporally unsafe rows are retained as rejection
+records; P1 results remain diagnostic until the restored PHX/LV inputs are
+joined to point-in-time NWP and authoritative settlement evidence.
+
+The evaluator accepts the active auxiliary forecast-city keys `nyc`, `la`
+(`los_angeles`), and `austin` as well as the legacy `phx`/`lv` keys. This does
+not infer or change Kalshi settlement rules: NYC/LA/Austin contract metadata
+and settlement stations must be supplied and audited separately.
+
+To inspect the current NYC/Los Angeles/Austin input identity and provenance
+without mutating data:
+
+```bash
+python3 scripts/weather/city_focus.py --research-root data/weather_research
+```
+
+The audit is read-only and warns when retained city market series are hourly
+rather than verified daily settlement labels.
+
+For the active auxiliary ensemble archive, daily maxima and minima are reduced
+inside each member before the ensemble summary is calculated:
+
+```bash
+python3 scripts/weather/build_daily_ensemble_forecasts.py \
+  --members data/weather_research/gefs/gefs_members.parquet \
+  --output /tmp/daily_ensemble_forecasts.csv
+```
+
+This preserves forecast issue and receipt timestamps and uses fixed local
+standard-time windows. The current archive is prospective-only and does not
+overlap the checked-in labels, so it is not yet a skill result.
+
+The deterministic hurdle-rate baseline can be built from the same schedule:
+
+```bash
+python3 scripts/weather/build_climatology_forecasts.py \
+  --schedule /tmp/daily_ensemble_forecasts.csv \
+  --labels data/weather_research/ghcn_city/labels_daily.csv \
+  --output /tmp/climatology_forecasts.csv \
+  --rejections /tmp/climatology_rejections.csv
+```
+
+It uses only prior, available same-month labels and fails closed when history
+is unavailable.
+
+To measure the observation-only nowcast baseline by local hour:
+
+```bash
+python3 scripts/weather/evaluate_nowcast.py
+```
+
+The output is a diagnostic for how quickly observed extrema converge to final
+labels; it is not a claim of improvement over NWP.
+
+For bucket-level probability scoring, provide one settled-market label per
+event and evaluate the generated partition:
+
+```bash
+python3 scripts/weather/evaluate_bucket_probabilities.py \
+  --probabilities /path/to/bucket_probabilities.csv \
+  --labels /path/to/settled_market_labels.csv \
+  --output /path/to/bucket_skill_summary.csv \
+  --rejections /path/to/bucket_skill_rejections.csv
 ```
 
 The collector requires credential configuration before it may connect:
@@ -168,9 +287,12 @@ Use `scripts/weather/nomads_forecasts.py` to poll NOAA NOMADS GRIB-filter
 endpoints for small PHX/KLAS subsets. Raw GRIB2 files and `forecasts/manifest.csv`
 preserve point-in-time provenance. Install `python-eccodes` (or `wgrib2`) to
 decode; without a decoder the raw files remain authoritative. Before training,
-apply `scripts/weather/asof_forecasts.py:known_forecasts` and require
-`initialization_time_utc <= decision_time_utc` (and valid time no later than the
-decision timestamp).
+apply `scripts/weather/pit.py:available_asof` (wrapped by
+`asof_forecasts.py:known_forecasts`) and require both
+`initialization_time_utc <= decision_time_utc` and
+`source_receipt_time <= decision_time_utc`; missing timestamps fail closed.
+For features whose valid time must already have occurred, restrict further with
+`valid_forecasts_asof`.
 
 GEFS coverage, historical counts, and the distinction between live members,
 historical deterministic forecasts, NOMADS operational files, and the NOAA
